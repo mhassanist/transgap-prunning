@@ -1,0 +1,23 @@
+# TransGap v2 — Baseline Training Config
+# Target: ResNet-110 on CIFAR-10, 94.50%+
+
+model: resnet110
+dataset: cifar10
+
+# Training
+epochs: 300
+batch_size: 128
+lr: 0.1
+momentum: 0.9
+weight_decay: 0.0005
+warmup_epochs: 5
+label_smoothing: 0.1
+grad_clip: 5.0
+
+# Augmentation
+use_mixup: true
+mixup_alpha: 0.2
+
+# Paths
+data_path: ./data
+save_dir: ./checkpoints

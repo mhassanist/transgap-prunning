@@ -1,0 +1,41 @@
+# TransGap v2 — Pruning Pipeline Config
+# Full pipeline: block removal + channel pruning + fine-tuning
+
+model: resnet56
+dataset: cifar10
+
+# Baseline checkpoint (set via --checkpoint flag)
+# checkpoint: ./checkpoints/resnet56_cifar10_baseline.pth
+
+# TG Computation
+num_cal_batches: 10
+channel_tg_method: approx   # 'approx' (fast, Eq.6) or 'exact' (slow, Eq.4)
+
+# Block Pruning
+max_block_tg: 0.05          # Maximum TG for block removal candidacy
+target_flops_ratio: 0.5     # Target: 50% FLOPs remaining
+
+# Channel Pruning
+max_channel_ratio: 0.7      # Max fraction of channels to prune per block
+
+# Fine-tuning
+ft_epochs: 300
+ft_lr: 0.01
+ft_weight_decay: 0.0005
+ft_warmup_epochs: 5
+label_smoothing: 0.1
+use_mixup: true
+mixup_alpha: 0.2
+grad_clip: 5.0
+
+# Knowledge Distillation
+kd_alpha: 0.7
+kd_temperature: 4.0
+
+# TG-Aware LR Scaling
+tg_lr_alpha: 1.0            # Scale factor for adjacent-to-removed blocks
+
+# Paths
+batch_size: 128
+data_path: ./data
+save_dir: ./checkpoints
