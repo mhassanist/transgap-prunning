@@ -2,7 +2,9 @@
 Full A8: cross-backbone TG-vs-empirical-Δaccuracy correlation.
 
 For each candidate block in {ResNet-56, ResNet-110, ResNet-50}, replace that
-single block with identity, fine-tune briefly, measure Δaccuracy. The output
+single block with identity, fine-tune with the manuscript's §4.4 recipe
+(150 epochs CIFAR / 90 epochs ImageNet, KD α=0.5, T=4, Mixup, cosine LR),
+measure Δaccuracy. The output
 is a list of (backbone, block, tg, actual_acc_drop) entries that the paper's
 A8 ablation can use for an honest Pearson r computation.
 
@@ -76,11 +78,11 @@ def set_seed(s):
 
 
 def run_cifar_single_block(backbone, block_name, save_dir, data_path, checkpoint_dir, seed=42):
-    """Remove ONE block on CIFAR-10 R56 or R110, fine-tune 15 epochs."""
+    """Remove ONE block on CIFAR-10 R56 or R110, fine-tune with the §4.4 recipe (150 epochs)."""
     from models.resnet_cifar import resnet56, resnet110
     from training.trainer import Trainer
     from utils.checkpoint import load_checkpoint
-    from data.cifar import get_cifar10_loaders
+    from training.baseline import get_cifar_loaders
 
     set_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -88,13 +90,14 @@ def run_cifar_single_block(backbone, block_name, save_dir, data_path, checkpoint
     model_fn = resnet56 if backbone == 'r56_cifar10' else resnet110
     model = model_fn(num_classes=10)
     baseline_ckpt = f"resnet{'56' if backbone=='r56_cifar10' else '110'}_cifar10_baseline.pth"
-    load_checkpoint(model, os.path.join(checkpoint_dir, baseline_ckpt))
+    load_checkpoint(os.path.join(checkpoint_dir, baseline_ckpt), model, device=device)
     teacher = copy.deepcopy(model).to(device).eval()
     for p in teacher.parameters():
         p.requires_grad = False
 
     # Measure baseline accuracy
-    train_loader, test_loader = get_cifar10_loaders(data_path, batch_size=128, num_workers=4)
+    train_loader, test_loader, _ = get_cifar_loaders('cifar10', batch_size=128,
+                                                      data_path=data_path, num_workers=4)
     model.to(device)
     model.eval()
     correct = 0
@@ -108,56 +111,23 @@ def run_cifar_single_block(backbone, block_name, save_dir, data_path, checkpoint
     baseline_acc = 100.0 * correct / total
     print(f"Baseline {backbone}: {baseline_acc:.2f}%")
 
-    # Remove the single block (replace with identity)
-    layer_name, idx = block_name.rsplit('.', 1)
-    idx = int(idx)
-    layer = getattr(model, layer_name)
-    # In CIFAR ResNets, BasicBlock has conv1, bn1, conv2, bn2 with residual add
-    # Replacing with identity: zero out conv2's weights so F(x) = 0 and Y = X + 0 = X
-    block = layer[idx]
-    with torch.no_grad():
-        for p in block.parameters():
-            p.zero_()
-    # After zeroing, block returns ReLU(X + 0) = X (assuming downstream relu) — effectively identity
-    # Better approach: literal identity replacement via a forward hook or substitute module.
-    # Use the existing block_pruner if available
+    # Remove the single block (replace with identity) — the same
+    # model.replace_block_with_identity() used by run_e1_r110_correlation.py
+    # (proven on TRUBA: 34 real result JSONs in results/) and the mechanism
+    # the manuscript's §4.4/S4a describes ("replacing each selected block
+    # with an identity mapping"). No zero-weight or BlockPruner workaround
+    # needed — resnet56/resnet110 both expose this method (models/resnet_cifar.py).
+    model.replace_block_with_identity(block_name)
+    print(f"Replaced {block_name} with IdentityBlock")
 
-    try:
-        from pruning.block_pruner import BlockPruner
-        bp = BlockPruner(model)
-        # Restore the block first
-        load_checkpoint(model, os.path.join(checkpoint_dir, baseline_ckpt))
-        model.to(device)
-        # BlockPruner uses block_tg dict to decide which to remove; force-remove this one
-        # Approach: set block_tg to make only this one removable
-        block_tg = {block_name: 0.0}
-        for ln in ['layer1', 'layer2', 'layer3']:
-            l = getattr(model, ln)
-            for i in range(len(l)):
-                key = f'{ln}.{i}'
-                if key not in block_tg:
-                    block_tg[key] = 1.0  # high → not removed
-        bp.set_block_tg(block_tg)
-        # Remove top-1 lowest TG block (which is our target)
-        model, removed = bp.prune(num_blocks=1)
-        assert block_name in removed, f"Expected to remove {block_name}, got {removed}"
-        print(f"Removed block {block_name}")
-    except (ImportError, AttributeError) as e:
-        print(f"BlockPruner approach failed: {e}; falling back to zero-conv approach")
-        # Reload and zero conv weights
-        load_checkpoint(model, os.path.join(checkpoint_dir, baseline_ckpt))
-        model.to(device)
-        block = getattr(model, layer_name)[idx]
-        for n, p in block.named_parameters():
-            with torch.no_grad():
-                p.zero_()
-
-    # Fine-tune 15 epochs
+    # Fine-tune with the manuscript's §4.4 recipe (150 epochs, KD α=0.5, T=4, Mixup, cosine LR) —
+    # this is the recipe §5.7/A8 states was used to produce Table 7, verbatim-confirmed against
+    # "TransGap_manuscript formatted.docx" (old-work/paper1-transgap/archive/00_2026_root_archive.zip).
     ft_config = {
         'lr': 0.01, 'momentum': 0.9, 'weight_decay': 5e-4,
-        'epochs': 15, 'warmup_epochs': 2,
+        'epochs': 150, 'warmup_epochs': 5,
         'label_smoothing': 0.1, 'use_mixup': True, 'mixup_alpha': 0.2,
-        'use_kd': True, 'kd_alpha': 0.7, 'kd_temperature': 4.0, 'grad_clip': 5.0,
+        'use_kd': True, 'kd_alpha': 0.5, 'kd_temperature': 4.0, 'grad_clip': 5.0,
     }
     trainer = Trainer(model, train_loader, test_loader, device, ft_config, teacher=teacher)
     save_path = os.path.join(save_dir, f"a8full_{backbone}_{block_name}_seed{seed}.pth")
@@ -172,7 +142,7 @@ def run_cifar_single_block(backbone, block_name, save_dir, data_path, checkpoint
         'baseline_acc': round(baseline_acc, 2),
         'final_acc': round(final_acc, 2),
         'actual_acc_drop': round(baseline_acc - final_acc, 3),
-        'ft_epochs': 15,
+        'ft_epochs': 150,
     }
     out_path = os.path.join(save_dir, f"a8full_{backbone}_{block_name}_summary.json")
     with open(out_path, 'w') as f:
@@ -182,11 +152,10 @@ def run_cifar_single_block(backbone, block_name, save_dir, data_path, checkpoint
 
 
 def run_imagenet_single_block(block_name, save_dir, data_path, checkpoint_dir, seed=42):
-    """Remove ONE block on ImageNet R50, fine-tune 5 epochs."""
+    """Remove ONE block on ImageNet R50, fine-tune with the §4.4 recipe (90 epochs)."""
     import torchvision.models as tvm
     from training.trainer import Trainer
-    from data.imagenet import get_imagenet_loaders
-    from experiments.run_imagenet import IdentityBottleneck, prune_resnet50_blocks
+    from experiments.run_imagenet import get_imagenet_loaders, IdentityBottleneck, prune_resnet50_blocks
 
     set_seed(seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -207,7 +176,7 @@ def run_imagenet_single_block(block_name, save_dir, data_path, checkpoint_dir, s
     train_loader, val_loader = get_imagenet_loaders(data_path, batch_size=64, num_workers=4)
     ft_config = {
         'lr': 0.001, 'momentum': 0.9, 'weight_decay': 1e-4,
-        'epochs': 5, 'warmup_epochs': 1,
+        'epochs': 90, 'warmup_epochs': 5,
         'label_smoothing': 0.1, 'use_mixup': False,
         'use_kd': True, 'kd_alpha': 0.5, 'kd_temperature': 4.0, 'grad_clip': 0,
     }
@@ -224,7 +193,7 @@ def run_imagenet_single_block(block_name, save_dir, data_path, checkpoint_dir, s
         'baseline_acc': baseline_acc,
         'final_acc': round(final_acc, 2),
         'actual_acc_drop': round(baseline_acc - final_acc, 3),
-        'ft_epochs': 5,
+        'ft_epochs': 90,
     }
     out_path = os.path.join(save_dir, f"a8full_r50_imagenet_{block_name}_summary.json")
     with open(out_path, 'w') as f:

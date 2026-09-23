@@ -1,5 +1,4 @@
 # CLAUDE.md — TransGap v2
-
 ## Project
 Neural network pruning research codebase. Structured pruning via Transformation Gap (TG).
 Targets CIFAR-10 (ResNet-56/110) and ImageNet (ResNet-50).
@@ -33,14 +32,15 @@ Format: `{'model_state_dict', 'optimizer_state_dict', 'epoch', 'best_acc', 'conf
 Load with `load_checkpoint(path, model, device=device)` from `utils.checkpoint`.
 Naming convention: `<model>_<dataset>_<tag>.pth`, e.g. `resnet110_cifar10_baseline.pth`.
 
-### Fine-tune recipe (150-epoch standard)
+### Fine-tune recipe (150-epoch standard — matches manuscript §4.4/§5.7, verbatim-confirmed
+### against "TransGap_manuscript formatted.docx" in old-work/paper1-transgap/archive/00_2026_root_archive.zip)
 ```python
 ft_config = {
     'lr': 0.01, 'momentum': 0.9, 'weight_decay': 5e-4,
     'epochs': 150, 'warmup_epochs': 5,
     'label_smoothing': 0.1,
     'use_mixup': True, 'mixup_alpha': 0.2,
-    'use_kd': True, 'kd_alpha': 0.7, 'kd_temperature': 4.0,
+    'use_kd': True, 'kd_alpha': 0.5, 'kd_temperature': 4.0,
     'grad_clip': 5.0, 'save_every': 50,
 }
 ```
@@ -55,11 +55,12 @@ ft_config = {
 | Baseline | `run_baseline.py` | Train R56/R110 from scratch |
 | Main pruning | `run_pruning.py` | Full block+channel pruning pipeline |
 | A1–A7 | `run_ablations.py` | Ablation suite |
-| A8 | `run_ablation_A8_full.py` | Single-block removal vs TG (R56/R110/R50, 15 epochs) |
+| A8 | `run_ablation_A8_full.py` | Single-block removal vs TG (R56/R110/R50, §4.4 recipe: 150 epochs CIFAR / 90 epochs ImageNet) |
 | E1 | `run_e1_r110_correlation.py` | Cross-backbone TG correlation (R110, 150 epochs) |
 | Orthogonality | `run_orthogonality.py` | TG distribution analysis |
 | Multi-seed | `run_multiseed.py` | Robustness across seeds |
 | ImageNet | `run_imagenet_full.py` | R50/ImageNet full pipeline |
+| Idea12-P1 | `run_phase1_validation.py` | Idea #12 Phase 1: PropTG vs. Table 7 ground truth (10 known R56 blocks, forward-passes only, no fine-tuning). See `../IDEA12_MULTIHOP_PROPAGATED_IMPACT_PLAN.md` for the full spec and Gate 1 decision rule. Unit tests: `tests/test_propagated_tg.py` (6/6 passing locally, CPU-only, no checkpoint needed). |
 
 ## E1 workflow (current active experiment)
 ```bash
